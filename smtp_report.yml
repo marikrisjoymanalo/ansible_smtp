@@ -3,13 +3,14 @@
   hosts: ansible_smtp_report
   become: yes
   vars:
-    output_file: "smtp-report.csv"
-    temp_file: "smtp-report.tmp.csv"
+    output_file: "/root/smtp-report.csv"
+    temp_file: "/root/smtp-report.tmp.csv"
     report_dir: "/root/smtp-report/daily-report"
     log_file: "/root/smtp-log/daily-email-cleanup.log"
     limit_mb: 20
     email_recipients: "marikrisjoymanalo@deltek.com"
     email_from: "CloudNoReply@deltek.com"
+    script_path: "/root/smtp-report-script.sh"
 
   tasks:
     - name: Get current date
@@ -33,27 +34,26 @@
         state: directory
         mode: '0755'
 
-    - name: Clear temp file
-      file:
-        path: "{{ temp_file }}"
-        state: absent
-
-    - name: Create temp file
-      file:
-        path: "{{ temp_file }}"
-        state: touch
-        mode: '0644'
-
     - name: Create processing script
       copy:
-        dest: /tmp/process_smtp_queue.sh
+        dest: "{{ script_path }}"
         mode: '0755'
         content: |
           #!/bin/bash
-          limit_bytes=$(({{ limit_mb }} * 1024 * 1024))
+          output_file="{{ output_file }}"
           temp_file="{{ temp_file }}"
+          report_dir="{{ report_dir }}"
+          report_date="{{ report_date }}"
+          final_file="{{ final_file }}"
+          log_file="{{ log_file }}"
+          server_name="{{ server_name }}"
+          limit_mb={{ limit_mb }}
           
+          # Clear temp file
           > "$temp_file"
+          
+          # 20MB in bytes
+          limit_bytes=$((limit_mb * 1024 * 1024))
           
           for file in /var/spool/mqueue/df*; do
             [ ! -f "$file" ] && continue
@@ -65,88 +65,75 @@
             if [ "$filesize_bytes" -gt "$limit_bytes" ]; then
               filesize_num=$(awk "BEGIN {printf \"%.2f\", $filesize_bytes/1024/1024}")
               
-              # Extract headers from df file
-              while IFS= read -r line; do
-                line=$(echo "$line" | sed 's/^[ \t]*//')
-                case "$line" in
-                  Date:* ) [ -z "$date" ] && date="${line#Date: }" ;;
-                  From:* ) [ -z "$from" ] && from="${line#From: }" ;;
-                  To:* ) [ -z "$to" ] && to="${line#To: }" ;;
-                  Subject:* ) [ -z "$subject" ] && subject="${line#Subject: }" ;;
-                  Content-Disposition:* ) [ -z "$cd" ] && cd="${line#Content-Disposition: }" ;;
-                  Message-ID:* | Message-Id:* )
-                    if [ -z "$messageid_server" ]; then
-                      msgid="${line#*: }"
-                      messageid_server=$(echo "$msgid" | sed -n 's/.*@\([^.]*\).*/\1/p')
-                    fi
-                    ;;
-                esac
-              done < <(grep -Ei "^\s*(Date|From|To|Subject|Content-Disposition|Message-I[Dd]):" "$file" 2>/dev/null)
-              
-              # Fallback: parse qf file
+              # Parse qf file
               qf_file="/var/spool/mqueue/qf${file##*/df}"
               if [ -f "$qf_file" ]; then
                 while IFS= read -r line; do
-                  line=$(echo "$line" | sed 's/^[ \t]*//')
                   case "$line" in
-                    "S<"* ) [ -z "$from" ] && from="${line#S<}" && from="${from%>}" ;;
-                    rRFC822\;* ) [ -z "$to" ] && to="${line#rRFC822; }" ;;
-                    H??Date:* ) [ -z "$date" ] && date="${line#H??Date: }" ;;
-                    H??Subject:* ) [ -z "$subject" ] && subject="${line#H??Subject: }" ;;
-                    H??From:* ) [ -z "$from" ] && from="${line#H??From: }" ;;
-                    H??To:* ) [ -z "$to" ] && to="${line#H??To: }" ;;
-                    H??Message-ID:* | H??Message-Id:* )
+                    S\<*)
+                      [ -z "$from" ] && from="${line#S<}" && from="${from%>}"
+                      ;;
+                    rRFC822\;*)
+                      [ -z "$to" ] && to="${line#rRFC822; }"
+                      ;;
+                    H\?\?Date:*)
+                      [ -z "$date" ] && date="${line#H??Date: }"
+                      ;;
+                    H\?\?Subject:*)
+                      [ -z "$subject" ] && subject="${line#H??Subject: }"
+                      ;;
+                    H\?\?From:*)
+                      [ -z "$from" ] && from="${line#H??From: }"
+                      ;;
+                    H\?\?To:*)
+                      [ -z "$to" ] && to="${line#H??To: }"
+                      ;;
+                    H\?\?Message-I*:*)
                       if [ -z "$messageid_server" ]; then
                         msgid="${line#H??Message-I*: }"
                         messageid_server=$(echo "$msgid" | sed -n 's/.*@\([^.]*\).*/\1/p')
                       fi
                       ;;
+                    H\?\?Content-Disposition:*)
+                      [ -z "$cd" ] && cd="${line#H??Content-Disposition: }"
+                      ;;
                   esac
                 done < "$qf_file"
               fi
               
-              # Escape commas for CSV
-              date="${date//,/ }"
-              from="${from//,/ }"
-              to="${to//,/ }"
-              subject="${subject//,/ }"
-              cd="${cd//,/ }"
-              messageid_server="${messageid_server//,/ }"
+              # Escape commas and quotes for CSV
+              date="${date//,/ }"; date="${date//\"/}"
+              from="${from//,/ }"; from="${from//\"/}"
+              to="${to//,/ }"; to="${to//\"/}"
+              subject="${subject//,/ }"; subject="${subject//\"/}"
+              cd="${cd//,/ }"; cd="${cd//\"/}"
+              messageid_server="${messageid_server//,/ }"; messageid_server="${messageid_server//\"/}"
               
-              echo "\"$file\",$filesize_num,\"$date\",\"$from\",\"$to\",\"$subject\",\"$cd\",\"$messageid_server\"" >> "$temp_file"
+              # Write to temp file
+              printf '"%s",%s,"%s","%s","%s","%s","%s","%s"\n' \
+                "$file" "$filesize_num" "$date" "$from" "$to" "$subject" "$cd" "$messageid_server" >> "$temp_file"
             fi
           done
+          
+          # Write CSV header
+          echo "File,FileSize(MB),Date,From,To,Subject,Content-Disposition,Message-ID-Server" > "$output_file"
+          
+          # Sort by size (largest first) and append data
+          if [ -f "$temp_file" ] && [ -s "$temp_file" ]; then
+            sort -t',' -k2 -nr "$temp_file" | awk -F',' 'BEGIN{OFS=","} { $2=$2 " MB"; print }' >> "$output_file"
+          fi
+          
+          rm -f "$temp_file"
+          
+          echo "Report generated with $(tail -n +2 "$output_file" | wc -l) entries"
 
     - name: Execute processing script
-      command: /tmp/process_smtp_queue.sh
-      register: script_result
+      command: "{{ script_path }}"
+      register: script_output
 
-    - name: Check temp file contents
-      command: wc -l {{ temp_file }}
-      register: temp_line_count
-      ignore_errors: yes
-
-    - name: Display temp file line count
+    - name: Display script output
       debug:
-        msg: "Temp file has {{ temp_line_count.stdout }} lines"
-
-    - name: Create CSV header
-      copy:
-        content: "File,FileSize(MB),Date,From,To,Subject,Content-Disposition,Message-ID-Server\n"
-        dest: "{{ output_file }}"
-        mode: '0644'
-
-    - name: Sort and append data to CSV
-      shell: |
-        sort -t',' -k2 -nr "{{ temp_file }}" | awk -F',' 'BEGIN{OFS=","} { $2=$2 " MB"; print }' >> "{{ output_file }}"
-      args:
-        executable: /bin/bash
-      when: temp_file is file
-
-    - name: Remove temp file
-      file:
-        path: "{{ temp_file }}"
-        state: absent
+        var: script_output.stdout_lines
 
     - name: Check if report file exists and has content
       stat:
@@ -161,13 +148,13 @@
     - name: Send email report
       shell: |
         echo -e "Please find your weekly report listing all queued/deferred emails attached - Emails exceeding 20 MB will be deleted post-report to prevent disk space issues.\n\nBest regards,\nDeltek" | \
-        mailx -s "{{ server_name }} queued/deferred email report TEST" \
+        mailx -s "{{ server_name }} queued/deferred email report TEST2" \
               -r "{{ email_from }}" \
               -a "{{ output_file }}" \
               {{ email_recipients }}
       args:
         executable: /bin/bash
-      when: report_stat.stat.exists and report_stat.stat.size > 0
+      when: report_stat.stat.exists and report_stat.stat.size > 100
 
     - name: Log report generation
       lineinfile:
@@ -180,6 +167,7 @@
         src: "{{ output_file }}"
         dest: "{{ report_dir }}/{{ final_file }}"
         remote_src: yes
+      when: report_stat.stat.exists
 
     - name: Remove original report file
       file:
@@ -192,7 +180,7 @@
         state: stopped
       register: sendmail_stop
 
-    - name: Log sendmail stop status
+    - name: Log sendmail stop
       lineinfile:
         path: "{{ log_file }}"
         line: "{{ ansible_date_time.iso8601 }} {{ 'Sendmail stopped successfully' if sendmail_stop.changed else 'WARNING: Failed to stop sendmail' }}"
@@ -203,6 +191,7 @@
         tail -n +2 "{{ report_dir }}/{{ final_file }}" | cut -d',' -f1 | tr -d '"'
       register: files_to_delete
       changed_when: false
+      ignore_errors: yes
 
 #    - name: Delete queued email files
 #      shell: |
@@ -220,7 +209,7 @@
 #        done <<< "{{ files_to_delete.stdout }}"
 #      args:
 #        executable: /bin/bash
-#      when: files_to_delete.stdout | length > 0
+#      when: files_to_delete.stdout is defined and files_to_delete.stdout | length > 0
 
     - name: Start sendmail service
       systemd:
@@ -228,8 +217,13 @@
         state: started
       register: sendmail_start
 
-    - name: Log sendmail start status
+    - name: Log sendmail start
       lineinfile:
         path: "{{ log_file }}"
         line: "{{ ansible_date_time.iso8601 }} {{ 'Sendmail started successfully' if sendmail_start.changed else 'ERROR: Failed to start sendmail' }}"
         create: yes
+
+    - name: Clean up processing script
+      file:
+        path: "{{ script_path }}"
+        state: absent
