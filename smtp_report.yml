@@ -1,3 +1,4 @@
+---
 - name: SMTP Queue Report and Cleanup
   hosts: ansible_smtp_report
   become: yes
@@ -129,6 +130,16 @@
         path: "{{ temp_file }}"
         state: absent
 
+    - name: Check if report file exists and has content
+      stat:
+        path: "{{ output_file }}"
+      register: report_stat
+
+    - name: Display report file info
+      debug:
+        msg: "Report file size: {{ report_stat.stat.size | default(0) }} bytes"
+      when: report_stat.stat.exists
+
     - name: Send email report
       shell: |
         echo -e "Please find your weekly report listing all queued/deferred emails attached - Emails exceeding 20 MB will be deleted post-report to prevent disk space issues.\n\nBest regards,\nDeltek" | \
@@ -138,15 +149,24 @@
               {{ email_recipients }}
       args:
         executable: /bin/bash
-
-    - name: Move report to final location
-      command: mv "{{ output_file }}" "{{ report_dir }}/{{ final_file }}"
+      when: report_stat.stat.exists and report_stat.stat.size > 0
 
     - name: Log report generation
       lineinfile:
         path: "{{ log_file }}"
         line: "{{ ansible_date_time.iso8601 }} Report generated and emailed: {{ report_dir }}/{{ final_file }}"
         create: yes
+
+    - name: Copy report to final location
+      copy:
+        src: "{{ output_file }}"
+        dest: "{{ report_dir }}/{{ final_file }}"
+        remote_src: yes
+
+    - name: Remove original report file
+      file:
+        path: "{{ output_file }}"
+        state: absent
 
     - name: Stop sendmail service
       systemd:
@@ -172,7 +192,7 @@
 #          if [ -n "$file" ] && [ -f "$file" ]; then
 #            rm -f "$file"
 #            echo "{{ ansible_date_time.iso8601 }} Deleted: $file" >> "{{ log_file }}"
-            
+#            
 #            qf_file="/var/spool/mqueue/qf${file##*/df}"
 #            if [ -f "$qf_file" ]; then
 #              rm -f "$qf_file"
