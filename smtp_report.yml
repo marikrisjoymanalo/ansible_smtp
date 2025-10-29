@@ -1,6 +1,6 @@
 ---
 - name: SMTP Queue Report and Cleanup
-  hosts: ansible_smtp_report
+  hosts: ansible_smtp_report_test
   become: yes
   vars:
     output_file: "/root/smtp-report.csv"
