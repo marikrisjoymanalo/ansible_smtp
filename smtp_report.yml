@@ -8,7 +8,7 @@
     report_dir: "/root/smtp-report/daily-report"
     log_file: "/root/smtp-log/daily-email-cleanup.log"
     limit_mb: 20
-    email_recipients: "marikrisjoymanalo@deltek.com"
+    email_recipients: "marikrisjoymanalo@deltek.com NinaMonicaInandan@deltek.com"
     email_from: "CloudNoReply@deltek.com"
     script_path: "/root/smtp-report-script.sh"
 
