@@ -148,7 +148,7 @@
     - name: Send email report
       shell: |
         echo -e "Please find your weekly report listing all queued/deferred emails attached - Emails exceeding 20 MB will be deleted post-report to prevent disk space issues.\n\nBest regards,\nDeltek" | \
-        mailx -s "{{ server_name }} queued/deferred email report TEST2" \
+        mailx -s "{{ server_name }} queued/deferred email report TEST3" \
               -r "{{ email_from }}" \
               -a "{{ output_file }}" \
               {{ email_recipients }}
