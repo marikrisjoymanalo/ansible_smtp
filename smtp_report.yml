@@ -193,23 +193,23 @@
       changed_when: false
       ignore_errors: yes
 
-#    - name: Delete queued email files
-#      shell: |
-#        while IFS= read -r file; do
-#          if [ -n "$file" ] && [ -f "$file" ]; then
-#            rm -f "$file"
-#            echo "{{ ansible_date_time.iso8601 }} Deleted: $file" >> "{{ log_file }}"
-#            
-#            qf_file="/var/spool/mqueue/qf${file##*/df}"
-#            if [ -f "$qf_file" ]; then
-#              rm -f "$qf_file"
-#              echo "{{ ansible_date_time.iso8601 }} Deleted: $qf_file" >> "{{ log_file }}"
-#            fi
-#          fi
-#        done <<< "{{ files_to_delete.stdout }}"
-#      args:
-#        executable: /bin/bash
-#      when: files_to_delete.stdout is defined and files_to_delete.stdout | length > 0
+    - name: Delete queued email files
+      shell: |
+        while IFS= read -r file; do
+          if [ -n "$file" ] && [ -f "$file" ]; then
+            rm -f "$file"
+            echo "{{ ansible_date_time.iso8601 }} Deleted: $file" >> "{{ log_file }}"
+            
+            qf_file="/var/spool/mqueue/qf${file##*/df}"
+            if [ -f "$qf_file" ]; then
+              rm -f "$qf_file"
+              echo "{{ ansible_date_time.iso8601 }} Deleted: $qf_file" >> "{{ log_file }}"
+            fi
+          fi
+        done <<< "{{ files_to_delete.stdout }}"
+      args:
+        executable: /bin/bash
+      when: files_to_delete.stdout is defined and files_to_delete.stdout | length > 0
 
     - name: Start sendmail service
       systemd:
